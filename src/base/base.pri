@@ -9,6 +9,7 @@ HEADERS += \
     $$PWD/bittorrent/peeraddress.h \
     $$PWD/bittorrent/peerinfo.h \
     $$PWD/bittorrent/private/bandwidthscheduler.h \
+    $$PWD/bittorrent/private/customstorage.h \
     $$PWD/bittorrent/private/filterparserthread.h \
     $$PWD/bittorrent/private/ltunderlyingtype.h \
     $$PWD/bittorrent/private/nativesessionextension.h \
@@ -90,6 +91,7 @@ SOURCES += \
     $$PWD/bittorrent/peeraddress.cpp \
     $$PWD/bittorrent/peerinfo.cpp \
     $$PWD/bittorrent/private/bandwidthscheduler.cpp \
+    $$PWD/bittorrent/private/customstorage.cpp \
     $$PWD/bittorrent/private/filterparserthread.cpp \
     $$PWD/bittorrent/private/nativesessionextension.cpp \
     $$PWD/bittorrent/private/nativetorrentextension.cpp \

@@ -95,6 +95,7 @@
 #include "base/utils/random.h"
 #include "magneturi.h"
 #include "private/bandwidthscheduler.h"
+#include "private/customstorage.h"
 #include "private/filterparserthread.h"
 #include "private/ltunderlyingtype.h"
 #include "private/nativesessionextension.h"
@@ -2242,6 +2243,8 @@ bool Session::addTorrent_impl(CreateTorrentParams params, const MagnetUri &magne
     else
         p.flags &= ~lt::add_torrent_params::flag_seed_mode;
 
+    p.storage = customStorageConstructor;
+
     m_addingTorrents.insert(hash, params);
     // Adding torrent to BitTorrent session
     m_nativeSession->async_add_torrent(p);
@@ -2412,6 +2415,8 @@ bool Session::addTorrent_impl(CreateTorrentParams params, const MagnetUri &magne
     p.max_connections = maxConnectionsPerTorrent();
     p.max_uploads = maxUploadsPerTorrent();
 
+    p.storage = customStorageConstructor;
+
     m_addingTorrents.insert(hash, params);
     // Adding torrent to BitTorrent session
     m_nativeSession->async_add_torrent(p);
@@ -2499,6 +2504,8 @@ bool Session::loadMetadata(const MagnetUri &magnetUri)
 #else
     p.flags |= lt::torrent_flags::upload_mode;
 #endif
+
+    p.storage = customStorageConstructor;
 
     // Adding torrent to BitTorrent session
     lt::error_code ec;

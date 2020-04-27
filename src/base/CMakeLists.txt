@@ -10,6 +10,7 @@ bittorrent/magneturi.h
 bittorrent/peeraddress.h
 bittorrent/peerinfo.h
 bittorrent/private/bandwidthscheduler.h
+bittorrent/private/customstorage.h
 bittorrent/private/filterparserthread.h
 bittorrent/private/ltunderlyingtype.h
 bittorrent/private/nativesessionextension.h
@@ -91,6 +92,7 @@ bittorrent/magneturi.cpp
 bittorrent/peeraddress.cpp
 bittorrent/peerinfo.cpp
 bittorrent/private/bandwidthscheduler.cpp
+bittorrent/private/customstorage.cpp
 bittorrent/private/filterparserthread.cpp
 bittorrent/private/nativesessionextension.cpp
 bittorrent/private/nativetorrentextension.cpp
