@@ -172,10 +172,12 @@ TorrentHandleImpl::TorrentHandleImpl(Session *session, const lt::torrent_handle 
     , m_tags(params.tags)
     , m_ratioLimit(params.ratioLimit)
     , m_seedingTimeLimit(params.seedingTimeLimit)
+    , m_operatingMode(params.forced ? TorrentOperatingMode::Forced : TorrentOperatingMode::AutoManaged)
     , m_hasSeedStatus(params.hasSeedStatus)
     , m_tempPathDisabled(params.disableTempPath)
     , m_hasRootFolder(params.hasRootFolder)
     , m_useAutoTMM(params.savePath.isEmpty())
+    , m_isPaused(params.paused)
 {
     if (m_useAutoTMM)
         m_savePath = Utils::Fs::toNativePath(m_session->categorySavePath(m_category));
@@ -266,11 +268,6 @@ qlonglong TorrentHandleImpl::completedSize() const
     return m_nativeStatus.total_wanted_done;
 }
 
-qlonglong TorrentHandleImpl::incompletedSize() const
-{
-    return (m_nativeStatus.total_wanted - m_nativeStatus.total_wanted_done);
-}
-
 qlonglong TorrentHandleImpl::pieceLength() const
 {
     return m_torrentInfo.pieceLength();
@@ -342,15 +339,6 @@ bool TorrentHandleImpl::hasRootFolder() const
 QString TorrentHandleImpl::actualStorageLocation() const
 {
     return QString::fromStdString(m_nativeStatus.save_path);
-}
-
-bool TorrentHandleImpl::isAutoManaged() const
-{
-#if (LIBTORRENT_VERSION_NUM < 10200)
-    return m_nativeStatus.auto_managed;
-#else
-    return static_cast<bool>(m_nativeStatus.flags & lt::torrent_flags::auto_managed);
-#endif
 }
 
 void TorrentHandleImpl::setAutoManaged(const bool enable)
@@ -706,26 +694,16 @@ TorrentInfo TorrentHandleImpl::info() const
 
 bool TorrentHandleImpl::isPaused() const
 {
-#if (LIBTORRENT_VERSION_NUM < 10200)
-    return (m_nativeStatus.paused && !isAutoManaged());
-#else
-    return ((m_nativeStatus.flags & lt::torrent_flags::paused)
-            && !isAutoManaged());
-#endif
-}
-
-bool TorrentHandleImpl::isResumed() const
-{
-    return !isPaused();
+    return m_isPaused;
 }
 
 bool TorrentHandleImpl::isQueued() const
 {
+    // Torrent is Queued if it isn't in Paused state but paused internally
 #if (LIBTORRENT_VERSION_NUM < 10200)
-    return (m_nativeStatus.paused && isAutoManaged());
+    return (m_nativeStatus.paused && !isPaused());
 #else
-    return ((m_nativeStatus.flags & lt::torrent_flags::paused)
-            && isAutoManaged());
+    return ((m_nativeStatus.flags & lt::torrent_flags::paused) && !isPaused());
 #endif
 }
 
@@ -804,12 +782,7 @@ bool TorrentHandleImpl::isSeed() const
 
 bool TorrentHandleImpl::isForced() const
 {
-#if (LIBTORRENT_VERSION_NUM < 10200)
-    return (!m_nativeStatus.paused && !isAutoManaged());
-#else
-    return (!(m_nativeStatus.flags & lt::torrent_flags::paused)
-            && !isAutoManaged());
-#endif
+    return (!isPaused() && (m_operatingMode == TorrentOperatingMode::Forced));
 }
 
 bool TorrentHandleImpl::isSequentialDownload() const
@@ -1420,25 +1393,22 @@ void TorrentHandleImpl::setFirstLastPiecePriorityImpl(const bool enabled, const 
 
 void TorrentHandleImpl::pause()
 {
-    if (isPaused()) return;
+    if (m_isPaused) return;
 
     setAutoManaged(false);
     m_nativeHandle.pause();
 
-    // Libtorrent doesn't emit a torrent_paused_alert when the
-    // torrent is queued (no I/O)
-    // We test on the cached m_nativeStatus
-    if (isQueued())
-        m_session->handleTorrentPaused(this);
+    m_speedMonitor.reset();
+
+    m_isPaused = true;
+    m_session->handleTorrentPaused(this);
 }
 
-void TorrentHandleImpl::resume(bool forced)
+void TorrentHandleImpl::resume(const TorrentOperatingMode mode)
 {
-    resume_impl(forced);
-}
+    if (!m_isPaused && (m_operatingMode == mode) && !hasError() && !m_hasMissingFiles)
+        return;
 
-void TorrentHandleImpl::resume_impl(bool forced)
-{
     if (hasError())
         m_nativeHandle.clear_error();
 
@@ -1447,9 +1417,13 @@ void TorrentHandleImpl::resume_impl(bool forced)
         m_nativeHandle.force_recheck();
     }
 
-    setAutoManaged(!forced);
-    if (forced)
+    setAutoManaged(mode == TorrentOperatingMode::AutoManaged);
+    if (mode == TorrentOperatingMode::Forced)
         m_nativeHandle.resume();
+
+    m_operatingMode = mode;
+    m_isPaused = false;
+    m_session->handleTorrentResumed(this);
 }
 
 void TorrentHandleImpl::moveStorage(const QString &newPath, const MoveStorageMode mode)
@@ -1581,18 +1555,11 @@ void TorrentHandleImpl::handleTorrentFinishedAlert(const lt::torrent_finished_al
 void TorrentHandleImpl::handleTorrentPausedAlert(const lt::torrent_paused_alert *p)
 {
     Q_UNUSED(p);
-
-    updateStatus();
-    m_speedMonitor.reset();
-
-    m_session->handleTorrentPaused(this);
 }
 
 void TorrentHandleImpl::handleTorrentResumedAlert(const lt::torrent_resumed_alert *p)
 {
     Q_UNUSED(p);
-
-    m_session->handleTorrentResumed(this);
 }
 
 void TorrentHandleImpl::handleSaveResumeDataAlert(const lt::save_resume_data_alert *p)
@@ -1614,8 +1581,6 @@ void TorrentHandleImpl::handleSaveResumeDataAlert(const lt::save_resume_data_ale
 
     if (useDummyResumeData) {
         resumeData["qBt-magnetUri"] = createMagnetURI().toStdString();
-        resumeData["paused"] = isPaused();
-        resumeData["auto_managed"] = isAutoManaged();
         // Both firstLastPiecePriority and sequential need to be stored in the
         // resume data if there is no metadata, otherwise they won't be
         // restored if qBittorrent quits before the metadata are retrieved:
@@ -1639,6 +1604,12 @@ void TorrentHandleImpl::handleSaveResumeDataAlert(const lt::save_resume_data_ale
     resumeData["qBt-queuePosition"] = (static_cast<int>(nativeHandle().queue_position()) + 1); // qBt starts queue at 1
     resumeData["qBt-hasRootFolder"] = m_hasRootFolder;
 
+    if (isPaused()) {
+        resumeData["paused"] = true;
+        resumeData["auto_managed"] = false;
+    }
+
+#if (LIBTORRENT_VERSION_NUM < 10204)
 #if (LIBTORRENT_VERSION_NUM < 10200)
     if (m_nativeStatus.stop_when_ready) {
 #else
@@ -1650,6 +1621,7 @@ void TorrentHandleImpl::handleSaveResumeDataAlert(const lt::save_resume_data_ale
         resumeData["paused"] = true;
         resumeData["auto_managed"] = false;
     }
+#endif
 
     m_session->handleTorrentResumeDataReady(this, resumeDataPtr);
 }
@@ -1675,7 +1647,7 @@ void TorrentHandleImpl::handleFastResumeRejectedAlert(const lt::fastresume_rejec
     if (p->error.value() == lt::errors::mismatching_file_size) {
         // Mismatching file size (files were probably moved)
         m_hasMissingFiles = true;
-        LogMsg(tr("File sizes mismatch for torrent '%1', pausing it.").arg(name()), Log::CRITICAL);
+        LogMsg(tr("File sizes mismatch for torrent '%1'. Cannot proceed further.").arg(name()), Log::CRITICAL);
     }
     else {
         LogMsg(tr("Fast resume data was rejected for torrent '%1'. Reason: %2. Checking again...")
@@ -1777,13 +1749,6 @@ void TorrentHandleImpl::handleMetadataReceivedAlert(const lt::metadata_received_
     if (filesCount() == 1)
         m_hasRootFolder = false;
     m_session->handleTorrentMetadataReceived(this);
-
-    if (isPaused()) {
-        // XXX: Unfortunately libtorrent-rasterbar does not send a torrent_paused_alert
-        // and the torrent can be paused when metadata is received
-        m_speedMonitor.reset();
-        m_session->handleTorrentPaused(this);
-    }
 
     // If first/last piece priority was specified when adding this torrent, we can set it
     // now that we have metadata:
